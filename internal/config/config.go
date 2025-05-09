@@ -1,71 +1,65 @@
 package config
 
 import (
-	"log"
+	"fmt"
 	"os"
+	"strconv"
 
-	"github.com/golang-migrate/migrate/v4"
-	migratepg "github.com/golang-migrate/migrate/v4/database/postgres"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
-	"github.com/joho/godotenv"
-	_ "github.com/lib/pq"
-	gormpg "gorm.io/driver/postgres"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
 type Config struct {
-	DB        *gorm.DB
+	ServerAddress string
+	LogLevel      string
+
+	DBHost     string
+	DBPort     int
+	DBUser     string
+	DBPassword string
+	DBName     string
+	DBSSLMode  string
+
 	JWTSecret string
+	JWTExpiry int
 }
 
-func LoadConfig() *Config {
-	godotenv.Load()
-	dsn := os.Getenv("DATABASE_URL")
-	db, err := gorm.Open(gormpg.Open(dsn), &gorm.Config{})
+func Load() (*Config, error) {
+	dbPort, err := strconv.Atoi(getEnv("DB_PORT", "5431"))
 	if err != nil {
-		log.Fatal("Failed to connect to database:", err)
+		return nil, fmt.Errorf("invalid DB_PORT: %w", err)
 	}
 
-	// Migrasyonları çalıştır
-	err = runMigrations(db, dsn)
+	jwtExpiry, err := strconv.Atoi(getEnv("JWT_EXPIRY", "24"))
 	if err != nil {
-		log.Fatal("Failed to run migrations:", err)
+		return nil, fmt.Errorf("invalid JWT_EXPIRY: %w", err)
 	}
 
 	return &Config{
-		DB:        db,
-		JWTSecret: os.Getenv("JWT_SECRET"),
-	}
+		ServerAddress: getEnv("SERVER_ADDRESS", ":8080"),
+		LogLevel:      getEnv("LOG_LEVEL", "info"),
+
+		DBHost:     getEnv("DB_HOST", "localhost"),
+		DBPort:     dbPort,
+		DBUser:     getEnv("DB_USER", "postgres"),
+		DBPassword: getEnv("DB_PASSWORD", "123456"),
+		DBName:     getEnv("DB_NAME", "GoGinExample"),
+		DBSSLMode:  getEnv("DB_SSLMODE", "disable"),
+
+		JWTSecret: getEnv("JWT_SECRET", "your-secret-key"),
+		JWTExpiry: jwtExpiry,
+	}, nil
 }
 
-func runMigrations(db *gorm.DB, dsn string) error {
-	// GORM'un *gorm.DB'sinden *sql.DB al
-	sqlDB, err := db.DB()
-	if err != nil {
-		return err
-	}
+func SetupDatabase(cfg *Config) (*gorm.DB, error) {
+	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d sslmode=%s",
+		cfg.DBHost, cfg.DBUser, cfg.DBPassword, cfg.DBName, cfg.DBPort, cfg.DBSSLMode)
+	return gorm.Open(postgres.Open(dsn), &gorm.Config{})
+}
 
-	// Migrate için PostgreSQL sürücüsü
-	driver, err := migratepg.WithInstance(sqlDB, &migratepg.Config{})
-	if err != nil {
-		return err
+func getEnv(key, defaultValue string) string {
+	if value, exists := os.LookupEnv(key); exists {
+		return value
 	}
-
-	// Migrasyon nesnesi oluştur
-	m, err := migrate.NewWithDatabaseInstance(
-		"file://migrations", // Migrasyon dosyalarının yolu
-		"postgres",          // Veritabanı adı
-		driver,
-	)
-	if err != nil {
-		return err
-	}
-
-	// Migrasyonları uygula
-	err = m.Up()
-	if err != nil && err != migrate.ErrNoChange {
-		return err
-	}
-
-	return nil
+	return defaultValue
 }

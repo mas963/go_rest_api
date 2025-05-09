@@ -31,6 +31,10 @@ var (
 		Code: "INTERNAL_ERROR",
 		Message: "Internal server error",
 	}
+	ErrUserExists = &AppError{
+		Code: "USER_EXISTS",
+		Message: "User already exists",
+	}
 )
 
 func GetErrorCode(err error) string {

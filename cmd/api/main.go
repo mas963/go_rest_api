@@ -1,54 +1,58 @@
 package main
 
 import (
+	"log"
+
 	"github.com/gin-gonic/gin"
-	"github.com/gin-gonic/gin/binding"
-	"github.com/go-playground/validator/v10"
+	"github.com/joho/godotenv"
 	"github.com/mas963/go_rest_api/internal/config"
 	"github.com/mas963/go_rest_api/internal/handlers"
 	"github.com/mas963/go_rest_api/internal/middleware"
 	"github.com/mas963/go_rest_api/internal/repositories"
 	"github.com/mas963/go_rest_api/internal/services"
-	"github.com/mas963/go_rest_api/internal/validators"
 )
 
 func main() {
-	cfg := config.LoadConfig()
-
-	if v, ok := binding.Validator.Engine().(*validator.Validate); ok {
-		v.RegisterValidation("strongpassword", validators.StrongPasswordValidator)
+	if err := godotenv.Load(); err != nil {
+		log.Println("Warning: .env file not found")
 	}
 
-	userRepo := repositories.NewUserRepository(cfg.DB)
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	db, err := config.SetupDatabase(cfg)
+	if err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
+
+	userRepo := repositories.NewUserRepository(db)
 
 	userService := services.NewUserService(userRepo)
-	authService := services.NewAuthService(userRepo)
 
-	userHandler := handlers.NewUserHandler(userService)
-	authHandler := handlers.NewAuthHandler(authService)
+	router := gin.Default()
 
-	r := gin.Default()
-	r.Use(handlers.ErrorHandler()) // add global error handler
+	authMiddleware := middleware.NewAuthMiddleware(cfg.JWTSecret)
 
-	// public routes
-	r.POST("/login", authHandler.Login)
-	r.POST("/register", authHandler.Register)
-
-	// protected routes
-	api := r.Group("/api")
-	api.Use(middleware.AuthMiddleware())
+	v1 := router.Group("/api/v1")
 	{
-		// user routes
-		api.GET("/users/:id", userHandler.GetUser)
+		v1.POST("/login", handlers.Login(userService, cfg.JWTSecret))
+		v1.POST("/register", handlers.Register(userService))
 
-		// admin-only routes
-		admin := api.Group("/admin").Use(middleware.RoleMiddleware("admin"))
+		authorized := v1.Group("/")
+		authorized.Use(authMiddleware.Authenticate())
 		{
-			admin.GET("/users", func(c *gin.Context) {
-				c.JSON(200, gin.H{"message": "Admin-only endpoint"})
-			})
+			authorized.GET("/users", handlers.GetUsers(userService))
+			authorized.GET("/users/:id", handlers.GetUser(userService))
+			authorized.PUT("/users/:id", handlers.UpdateUser(userService))
+			authorized.DELETE("/users/:id", handlers.DeleteUser(userService))
 		}
 	}
 
-	r.Run(":8080")
+	router.Use(handlers.ErrorHandler())
+
+	if err := router.Run(cfg.ServerAddress); err != nil {
+		log.Fatal(err)
+	}
 }
